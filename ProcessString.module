@@ -1,0 +1,228 @@
+<?php namespace ProcessWire;
+
+/**
+ * Class ProcessString
+ *
+ * @author			: İskender TOTOĞLU, @ukyo (community), @trk (Github)
+ * @website			: http://www.altivebir.com
+ *
+ */
+class ProcessString extends Process {
+
+    protected static $allowedFunctions = [
+        "pages", "page", "config", "modules", "user", "users",
+        "session", "fields", "templates", "database", "permissions", "roles",
+        "sanitizer", "datetime", "files", "cache", "languages", "input",
+        "inputGet", "inputPost", "inputCookie", "urls", "paths", "profiler", "region",
+        "label", "description", "notes"
+    ];
+
+    // ------------------------------------------------------------------------
+
+    protected static $allowedPageFunctions = ["label", "description", "notes"];
+
+    // ------------------------------------------------------------------------
+
+    /**
+     * Return an array of module information
+     *
+     * @return array
+     *
+     */
+    public static function getModuleInfo() {
+        return array(
+            'title' => 'ProcessString Module',
+            'version' => 1,
+            'summary' => 'With this module you can call ProcessWire API functions inside string.',
+            'href' => 'http://www.altivebir.com',
+            'icon' => 'cogs',
+            'autoload' => true,
+            'singular' => true,
+            'requires' => [
+                "ProcessWire>=3.0.0"
+            ]
+        );
+    }
+
+    // ------------------------------------------------------------------------
+
+    public function __construct() {}
+
+    // ------------------------------------------------------------------------
+
+    /**
+     * ProcessString
+     *
+     * @param string $str
+     * @param null $page
+     * @param string $language
+     * @return mixed|string
+     */
+    public static function processString($str = "", $page = null, $language = "") {
+        $page = is_null($page) ? wire('page') : $page;
+        if(!$language && wire('languages') && !wire('user')->language->isDefault()) {
+            $language = wire('user')->language;
+        }
+
+        $patterns = [];
+        foreach (self::$allowedFunctions as $key => $allowedFunction) {
+            $pattern = "/(?<" . $allowedFunction . ">\{" . $allowedFunction . "(:|\()(.*?)\})/";
+            $patterns[] = $pattern;
+            preg_match_all($pattern, $str, $matches);
+
+            $found = self::element($allowedFunction, $matches, []);
+            if(count($found)) {
+                foreach ($found as $k => $value) {
+                    $str = str_replace($value, self::precessFunction($value, $page, $language), $str);
+                }
+            }
+        }
+
+        return $str;
+    }
+
+    // ------------------------------------------------------------------------
+
+    /**
+     * Process Function check and call value function
+     *
+     * @param string $value
+     * @param null $page
+     * @param string $language
+     * @return mixed|null|Config|Fields|Fieldtypes|Modules|Notices|Page|Pages|Permissions|ProcessWire|Roles|Sanitizer|Session|Templates|User|Users|Wire|WireDatabasePDO|WireDateTime|WireFileTools|WireHooks|WireInput|WireMailTools|string
+     */
+    protected static function precessFunction($value = "", $page = null, $language = "") {
+        // Prepare value
+        $cleanValue = str_replace(['{', '}'], ['', ''], $value);
+        $isMultiple = explode(':', $cleanValue);
+
+        // Set language (for field properties)
+        if(!$language && wire('languages') && !wire('user')->language->isDefault()) {
+            $language = wire('user')->language;
+        }
+
+        // Set call and field property function and args
+        $call = [];
+        $fieldProperty = [];
+        if(count($isMultiple) > 1) {
+            foreach ($isMultiple as $key => $val) {
+                $isFunction = self::isFunction($val);
+                if(in_array($isFunction['value'], self::$allowedPageFunctions)) $fieldProperty[] = $isFunction;
+                else $call[] = $isFunction;
+            }
+        } else {
+            $isFunction = self::isFunction($isMultiple[0]);
+            if(in_array($isFunction['value'], self::$allowedPageFunctions)) $fieldProperty[] = $isFunction;
+            else $call[] = $isFunction;
+        }
+
+        $functionCall = null;
+
+        // Get and replace $call[] values
+        if(count($call)) {
+            foreach ($call as $key => $val) {
+                if($key == 0 && is_null($functionCall)) {
+                    if($val['value'] == 'page' && $page instanceof Page) {
+                        $functionCall = $page;
+                    }
+
+                    if($val['isFunction'] === true) {
+                        $functionCall = is_null($functionCall) ? wire($val['value'])->get($val['args']) : $page->get($val['args']);
+                        // $functionCall = wire($val['value'])->get($val['args']);
+                    } else {
+                        $functionCall = is_null($functionCall) ? wire($val['value']) : $page;
+                        // $functionCall = wire($val['value']);
+                    }
+                } else {
+                    if($val['isFunction'] === true) {
+                        $functionCall = call_user_func([$functionCall, $val['value']], $val['args']);
+                    } else {
+                        $functionCall = $functionCall->{$val['value']};
+                    }
+                }
+            }
+        }
+
+        // Get and replace $fieldProperty[] values
+        if(count($fieldProperty)) {
+            foreach ($fieldProperty as $key => $val) {
+                $functionCall = $page instanceof Page ? $page : wire('page');
+                if(in_array($val['value'], self::$allowedPageFunctions)) {
+                    $field_name = "";
+                    $prefix = "";
+                    $suffix = "";
+                    if(is_array($val['args'])) {
+                        if(!empty($val['args'][0])) $field_name = $val['args'][0];
+                        if(!empty($val['args'][1])) $prefix = $val['args'][1];
+                        if(!empty($val['args'][2])) $suffix = $val['args'][2];
+                    } else $field_name = $val['args'];
+                    if($field_name && $functionCall->template->fields($field_name)) {
+                        $field = $functionCall->fields($field_name);
+                        $property = $field->get($val['value'] . $language);
+                        if($property) $property = $prefix . $property . $suffix;
+                        $functionCall = $property;
+                    }
+                }
+            }
+        }
+
+        return $functionCall;
+    }
+
+    // ------------------------------------------------------------------------
+
+    /**
+     * Check value: is function, have args or arg ?
+     * @param string $value
+     * @return array
+     */
+    protected static function isFunction($value = "") {
+        $return = [
+            'isFunction' => false,
+            'value' => $value,
+            'args' => ''
+        ];
+
+        if(preg_match("/(?<args>\(([^\)]*)\))/", $value, $arg)) {
+            $args = self::element('args', $arg, []);
+            $return['value'] = str_replace($args, '', $value);
+            $args = strtr($args, ['(' => '', ')' => '']);
+            $args = explode('~', $args);
+            if(count($args) == 1) $args = $args[0];
+            $return['isFunction'] = true;
+            $return['args'] = $args;
+        }
+
+        return $return;
+    }
+
+    // ------------------------------------------------------------------------
+
+    /**
+     * Element
+     *
+     * Lets you determine whether an array index is set and whether it has a value.
+     * If the element is empty it returns NULL (or whatever you specify as the default value.)
+     *
+     * @param	string
+     * @param	array
+     * @param	mixed
+     * @return	mixed	depends on what the array contains
+     */
+    public static function element($item, array $array, $default = NULL) {
+        return array_key_exists($item, $array) && $array[$item] ? $array[$item] : $default;
+    }
+}
+
+/**
+ * ProcessString function call
+ *
+ * @param string $str
+ * @param null $page
+ * @param null $language
+ * @return mixed|string
+ */
+function processString($str = "", $page = null, $language = null) {
+    $processString = new ProcessString();
+    return $processString::processString($str, $page, $language);
+}
