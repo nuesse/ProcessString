@@ -35,7 +35,7 @@ echo processString($str);
 - Get homepage title
 ```php
 <?php
-$str = "You can visit our <a hre='{pages(1):url}'>{pages:get(1):url}</a>";
+$str = "You can visit our <a hre='{pages(1):url}'>{pages:get(1):title}</a>";
 echo processString($str);
 ?>
 ```
